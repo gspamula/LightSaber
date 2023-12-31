@@ -1,0 +1,196 @@
+# SPDX-FileCopyrightText: 2018 John Edgar Park for Adafruit Industries
+# SPDX-License-Identifier: MIT
+
+"""LASER SWORD (pew pew) example for Adafruit Hallowing & NeoPixel strip"""
+# pylint: disable=bare-except
+
+# Import necessary libraries
+import time
+import math
+import gc #garbage collector
+from digitalio import DigitalInOut, Direction, Pull
+import audioio #high level
+import audiocore #lower level
+import busio
+import board
+import neopixel
+import adafruit_lis3dh #accelorometer
+
+# Define the color of the lightsaber (red in this case)
+COLOR = (0, 255, 0)
+
+# Define motion sensitivity thresholds
+HIT_THRESHOLD = 350
+SWING_THRESHOLD = 125
+
+# Define the number of NeoPixels in the strip and the pin it's connected to
+NUM_PIXELS = 86
+NEOPIXEL_PIN = board.D5
+
+# Define pins for power, LEDs, and a switch
+POWER_PIN = board.D10
+SWITCH_PIN = board.D9
+
+# Initialize digital pins for power control and LEDs
+enable = DigitalInOut(POWER_PIN)
+enable.direction = Direction.OUTPUT
+enable.value = False #signals the prescence of a pull up resistor 
+
+# Initialize digital pins for the red, green, and blue LEDs
+red_led = DigitalInOut(board.D11)
+red_led.direction = Direction.OUTPUT
+
+# Initialize digital pins for the green LED
+green_led = DigitalInOut(board.D12)
+green_led.direction = Direction.OUTPUT
+
+# Initialize digital pins for the blue LED
+blue_led = DigitalInOut(board.D13)
+blue_led.direction = Direction.OUTPUT
+
+#Basically, each output controls a different color so we define that
+
+# Initialize audio output, mode, NeoPixel strip, and switch
+audio = audioio.AudioOut(board.A0)
+mode = 0 
+#state indicator which is a variable or piece of data that reflects the current condition or mode of a system. It provides information about the state of an application, indicating what the program is currently doing or what condition it is in.
+strip = neopixel.NeoPixel(NEOPIXEL_PIN, NUM_PIXELS, brightness=1, auto_write=False) #In this line, a NeoPixel object, named 'strip,' is created to control individually addressable RGB LEDs. It specifies the pin (NEOPIXEL_PIN) and the number of pixels (NUM_PIXELS). The initial brightness is set to full (brightness=1), and auto_write is disabled (auto_write=False), allowing manual updates for color changes in the LED strip.
+switch = DigitalInOut(SWITCH_PIN) 
+#This line initializes a `DigitalInOut` object named 'switch' to interface with a digital pin (`SWITCH_PIN`), representing a physical button or switch connected to the microcontroller for input operations.
+switch.direction = Direction.INPUT 
+#Setting the switch to an input direction
+switch.pull = Pull.UP 
+#Pull up resistor
+
+i2c = busio.I2C(board.SCL, board.SDA) 
+#This line initializes an `I2C` object named 'i2c' for Inter-Integrated Circuit communication on a microcontroller, specifying the pins (`board.SCL` for the clock, `board.SDA` for the data line).
+accel = adafruit_lis3dh.LIS3DH_I2C(i2c) 
+#This line initializes an instance of the LIS3DH accelerometer using the I2C communication protocol. The `accel` variable will serve as an interface to interact with the accelerometer sensor. The `adafruit_lis3dh.LIS3DH_I2C` class is part of the Adafruit CircuitPython library, designed for seamless integration with the LIS3DH sensor through I2C. By passing the previously defined `i2c` object as a parameter, this line ensures that the accelerometer is configured to communicate over the same I2C bus, facilitating data exchange with other devices.
+accel.range = adafruit_lis3dh.RANGE_4_G 
+#This line sets the measurement range of the accelerometer (`accel`) to ±4 G (gravity). It configures the LIS3DH sensor to detect accelerations within this range, influencing the precision of motion sensing.
+
+# Define colors for different states of the lightsaber
+COLOR_IDLE = (int(COLOR[0] / 1), int(COLOR[1] / 1), int(COLOR[2] / 1)) 
+#In this line, the variable `COLOR_IDLE` is established to represent the idle color of the lightsaber. It is defined as a tuple containing the red, green, and blue components. Each component is derived from the original `COLOR` tuple, ensuring integer values by dividing them by 1, although this division operation has no substantive impact on the values. Essentially, `COLOR_IDLE` mirrors the main color (`COLOR`) to signify the idle state with no discernible change in color.
+COLOR_SWING = COLOR #We can change the swing color if we want
+COLOR_HIT = (27, 27, 36) #Hit color (R,G,B)
+
+# Function to play a WAV file
+def play_wav(name, loop=False): 
+#This line defines a function named `play_wav` with two parameters: `name` representing the partial file name of a WAV file to be played, and `loop` as an optional parameter indicating whether the sound should loop indefinitely if set to `True`.
+    try: 
+        wave_file = open('sounds/' + name + '.wav', 'rb') #file opening interface
+        wave = audiocore.WaveFile(wave_file)
+        audio.play(wave, loop=loop)
+    except: 
+    #if that doesn't work it returns back to the next step, this is to prevent crashes if there is not a .wav file
+        return
+#This code snippet within a `try` block attempts to open a WAV file located in the 'sounds' directory. If successful, it creates a `WaveFile` object for audio playback and uses the `audio` object to play the file. The optional `loop` parameter determines whether the audio should loop indefinitely. This structure allows for handling potential exceptions, ensuring graceful handling of issues like file not found or reading errors.
+
+# Function to animate NeoPixels with accompanying sound effect for power on/off
+def power(sound, duration, reverse):
+#The `power` function is like a set of instructions for the lightsaber. 
+#It needs three things to work: the sound it should make (called `sound`), how long it should make that sound (called `duration`), and whether it should turn on or off (called `reverse`). 
+#The `sound` is like the noise it makes, the `duration` is how long that noise should last, and `reverse` decides if it should turn on or off. So, when you use this function, you tell the lightsaber what sound to make, how long to make it, and whether to turn on or off.
+    if reverse:
+        prev = NUM_PIXELS
+#The code snippet `if reverse: prev = NUM_PIXELS` is a simple condition that checks whether a variable named `reverse` is `True`. If it is, then another variable called `prev` is set to the total number of NeoPixels in the lightsaber (`NUM_PIXELS`). This is like telling the lightsaber, "If we want to turn off, set `prev` to the total number of lightsabers." 
+#it's a way to remember how many neopixels there are when planning the animation.
+    else:
+        prev = 0
+#This is like saying, "If we don't want to turn off, set prev to 0." Here, prev is used to keep track of the starting point for the animation, determining where the lightsaber animation should begin.
+    gc.collect() #clearing cache and ram
+    start_time = time.monotonic() #captures the current time and gives a variable to it
+    play_wav(sound) #will play the sound fed into the function
+    while True: #infinite loop
+        elapsed = time.monotonic() - start_time #elapsed time is total time - start time
+        if elapsed > duration: # this is in the case that you set auto sleep time
+            break #if so, it exits
+        fraction = elapsed / duration #if gone overtime, how much more has it gone 
+        if reverse:
+            fraction = 1.0 - fraction
+        fraction = math.pow(fraction, 0.5)
+        threshold = int(NUM_PIXELS * fraction + 0.5)
+        num = threshold - prev
+        if num != 0:
+            if reverse:
+                strip[threshold:prev] = [0] * -num
+            else:
+                strip[prev:threshold] = [COLOR_IDLE] * num
+            strip.show()
+            start_time -= NUM_PIXELS * 0.00003
+            prev = threshold
+#doing math to make sure the transitions are smooth
+    if reverse:
+        strip.fill(0) #ends by filling strip with 0
+    else:
+        strip.fill(COLOR_IDLE) #COLOR_IDLE, another thing we can define
+    strip.show() #applies all the changes we made
+    while audio.playing:
+        pass
+#more sychronization to ensure that these effects don't go off when the audio is still playing
+
+# Function to blend between two colors with a given ratio
+def mix(color_1, color_2, weight_2):
+    if weight_2 < 0.0:
+        weight_2 = 0.0
+    elif weight_2 > 1.0:
+        weight_2 = 1.0
+    weight_1 = 1.0 - weight_2
+    return (
+        int(color_1[0] * weight_1 + color_2[0] * weight_2),
+        int(color_1[1] * weight_1 + color_2[1] * weight_2),
+        int(color_1[2] * weight_1 + color_2[2] * weight_2),
+    )
+
+# Main program loop
+while True:
+    green_led.value = True
+
+    # Check if the button is pressed
+    if not switch.value:
+        # If currently off, power up and enter ON mode
+        if mode == 0:
+            enable.value = True
+            power('on', 1.7, False)
+            play_wav('idle', loop=True)
+            mode = 1
+        # If currently on, power down and enter OFF mode
+        else:
+            power('off', 1.15, True)
+            mode = 0
+            enable.value = False
+        # Wait for button release to avoid repeated triggering
+        while not switch.value:
+            time.sleep(0.2)
+
+    # If not OFF mode, check accelerometer data for motion
+    elif mode >= 1:
+        x, y, z = accel.acceleration
+        accel_total = x * x + z * z
+
+        # Large acceleration indicates a hit
+        if accel_total > HIT_THRESHOLD:
+            TRIGGER_TIME = time.monotonic()
+            play_wav('hit')
+            COLOR_ACTIVE = COLOR_HIT
+            mode = 3
+        # Mild acceleration indicates a swing
+        elif mode == 1 and accel_total > SWING_THRESHOLD:
+            TRIGGER_TIME = time.monotonic()
+            play_wav('swing')
+            COLOR_ACTIVE = COLOR_SWING
+            mode = 2
+        # If in SWING or HIT mode, update the NeoPixel colors based on time since trigger
+        elif mode > 1:
+            if audio.playing:
+                blend = time.monotonic() - TRIGGER_TIME
+                if mode == 2:
+                    blend = abs(0.5 - blend) * 2.0
+                strip.fill(mix(COLOR_ACTIVE, COLOR_IDLE, blend))
+                strip.show()
+            else:
+                play_wav('idle', loop=True)
+                strip.fill(COLOR_IDLE)
+                strip.show()
+                mode = 1  # IDLE mode now
